@@ -11,7 +11,7 @@ pipeline {
     BACKEND_SERVICE = "ems-backend-service"
     FRONTEND_SERVICE = "ems-frontend-service"
     CLUSTER = "ems-cluster"
-    BACKEND_CONTAINER_NAME = "ems-backend"      // container name as defined in task def
+    BACKEND_CONTAINER_NAME = "ems-backend"       // container name as defined in task def
     FRONTEND_CONTAINER_NAME = "ems-frontend"    // container name as defined in task def
     IMAGE_TAG = "${env.BUILD_NUMBER}-${env.GIT_COMMIT ?: 'manual'}"
   }
@@ -32,7 +32,6 @@ pipeline {
     stage('Pre-checks') {
       steps {
         script {
-          // ensure jq exists
           sh '''
             if ! command -v jq > /dev/null; then
               echo "jq is required but not installed. Install jq on the agent."
@@ -45,11 +44,11 @@ pipeline {
 
     stage('ECR Login') {
       steps {
-        script {
-          // Use instance profile if available; otherwise expect credentials (see below)
+        withAWS(credentials: 'aws-creds', region: "${AWS_REGION}") {
           sh '''
             echo "Logging into ECR..."
-            aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+            aws ecr get-login-password --region $AWS_REGION | \
+              docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
           '''
         }
       }
@@ -58,11 +57,11 @@ pipeline {
     stage('Build & Push Backend') {
       steps {
         dir('ems-backend') {
-          script {
+          withAWS(credentials: 'aws-creds', region: "${AWS_REGION}") {
             sh '''
               TAG=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_BACKEND:$IMAGE_TAG
-              # create repo if not exists (idempotent)
-              aws ecr describe-repositories --repository-names $ECR_REPO_BACKEND --region $AWS_REGION || aws ecr create-repository --repository-name $ECR_REPO_BACKEND --region $AWS_REGION
+              aws ecr describe-repositories --repository-names $ECR_REPO_BACKEND --region $AWS_REGION || \
+                aws ecr create-repository --repository-name $ECR_REPO_BACKEND --region $AWS_REGION
 
               docker build -t $ECR_REPO_BACKEND:$IMAGE_TAG .
               docker tag $ECR_REPO_BACKEND:$IMAGE_TAG $TAG
@@ -78,10 +77,11 @@ pipeline {
     stage('Build & Push Frontend') {
       steps {
         dir('ems-frontend') {
-          script {
+          withAWS(credentials: 'aws-creds', region: "${AWS_REGION}") {
             sh '''
               TAG=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
-              aws ecr describe-repositories --repository-names $ECR_REPO_FRONTEND --region $AWS_REGION || aws ecr create-repository --repository-name $ECR_REPO_FRONTEND --region $AWS_REGION
+              aws ecr describe-repositories --repository-names $ECR_REPO_FRONTEND --region $AWS_REGION || \
+                aws ecr create-repository --repository-name $ECR_REPO_FRONTEND --region $AWS_REGION
 
               docker build -t $ECR_REPO_FRONTEND:$IMAGE_TAG .
               docker tag $ECR_REPO_FRONTEND:$IMAGE_TAG $TAG
@@ -96,15 +96,13 @@ pipeline {
 
     stage('Deploy Backend to ECS') {
       steps {
-        script {
+        withAWS(credentials: 'aws-creds', region: "${AWS_REGION}") {
           sh '''
             BACKEND_IMAGE=$(cat backend_image_uri.txt)
             echo "Registering backend task definition revision with image $BACKEND_IMAGE"
 
-            # fetch current task def and create a new register JSON with modified image
             aws ecs describe-task-definition --task-definition $BACKEND_TASK_FAMILY --region $AWS_REGION > /tmp/backend_td.json
 
-            # Build a new task definition JSON suitable for register-task-definition
             jq --arg img "$BACKEND_IMAGE" --arg cname "$BACKEND_CONTAINER_NAME" '
               .taskDefinition
               | { family: .family,
@@ -122,12 +120,10 @@ pipeline {
                 }
             ' /tmp/backend_td.json > /tmp/backend-register.json
 
-            # register it
             REGISTER_OUT=$(aws ecs register-task-definition --cli-input-json file:///tmp/backend-register.json --region $AWS_REGION)
             NEW_TASK_DEF_ARN=$(echo "$REGISTER_OUT" | jq -r '.taskDefinition.taskDefinitionArn')
             echo "New backend task def ARN: $NEW_TASK_DEF_ARN"
 
-            # update service to use the new task definition
             aws ecs update-service --cluster $CLUSTER --service $BACKEND_SERVICE --task-definition $NEW_TASK_DEF_ARN --force-new-deployment --region $AWS_REGION
             echo "Triggered backend service update"
           '''
@@ -137,7 +133,7 @@ pipeline {
 
     stage('Deploy Frontend to ECS') {
       steps {
-        script {
+        withAWS(credentials: 'aws-creds', region: "${AWS_REGION}") {
           sh '''
             FRONTEND_IMAGE=$(cat frontend_image_uri.txt)
             echo "Registering frontend task definition revision with image $FRONTEND_IMAGE"
@@ -186,4 +182,4 @@ pipeline {
     }
   }
 }
-//end of file
+
