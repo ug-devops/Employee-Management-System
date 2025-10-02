@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ems-frontend
+  labels:
+    app: ems-frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ems-frontend
+  template:
+    metadata:
+      labels:
+        app: ems-frontend
+    spec:
+      containers:
+        - name: ems-frontend
+          image: usman10p/ems-app:frontend
+          ports:
+            - containerPort: 80
+          env:
+            - name: API_URL
+              value: http://ems-backend-service:8080   # internal service name
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "400m"
+              memory: "512Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ems-frontend-service
+spec:
+  selector:
+    app: ems-frontend
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+      nodePort: 30080        # fixed port for easier access
+  type: NodePort
+
